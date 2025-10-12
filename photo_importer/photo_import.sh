@@ -4,7 +4,7 @@
 # Imports photos from SD card with proper organization
 
 #put your destination here
-DESTINATION_ROOT="DESTINATION"
+DESTINATION_ROOT="/Volumes/Rays Photos/Rays Photos"
 
 # Colors for output
 RED='\033[0;31m'
@@ -41,11 +41,8 @@ find_sd_cards() {
             if [ -d "$volume/DCIM" ]; then
                 cards+=("$volume")
             else
-                # Check for any image/video files in the volume
+                # Only include volumes that actually contain media files
                 if find "$volume" -maxdepth 5 -type f \( -iname "*.jpg" -o -iname "*.jpeg" -o -iname "*.mov" -o -iname "*.mp4" -o -iname "*.awr" -o -iname "*.cr2" -o -iname "*.nef" \) -print -quit 2>/dev/null | grep -q .; then
-                    cards+=("$volume")
-                else
-                    # If no media files found, still include it as a potential card for user to choose
                     cards+=("$volume")
                 fi
             fi
@@ -107,9 +104,9 @@ scan_dates() {
             local extension="${filename##*.}"
             extension=$(echo "$extension" | tr '[:upper:]' '[:lower:]')
             
-            # Skip system/metadata files
+            # Skip system/metadata files (camera and DJI files)
             case "$extension" in
-                ind|thm|xml|bdm|bin|int|bnp|inp)
+                ind|thm|xml|bdm|bin|int|bnp|inp|scr|db|lrf)
                     continue
                     ;;
             esac
@@ -181,25 +178,76 @@ copy_files_by_date() {
         done
     }
     
-    print_status "Copying files to date-specific folders..."
-    
-    # Clear the log file
-    > "$temp_log"
-    
-    # Find all files and process them
-    find "$source_volume" -type f ! -name ".*" ! -path "*/.*" 2>/dev/null | while read -r file; do
+    print_status "Scanning files for copy..." >&2
+
+    # First pass: count total files to copy
+    local temp_file_list="/tmp/file_list_$$"
+    find "$source_volume" -type f ! -name ".*" ! -path "*/.*" 2>/dev/null > "$temp_file_list"
+
+    local total_files=0
+    while read -r file; do
         if [ -f "$file" ]; then
             local filename=$(basename "$file")
             local extension="${filename##*.}"
             extension=$(echo "$extension" | tr '[:upper:]' '[:lower:]')
-            
-            # Skip system/metadata files
+
+            # Skip system/metadata files in count
             case "$extension" in
                 ind|thm|xml|bdm|bin|int|bnp|inp)
                     continue
                     ;;
             esac
+            ((total_files++))
+        fi
+    done < "$temp_file_list"
+
+    if [ "$total_files" -eq 0 ]; then
+        print_warning "No files found to copy." >&2
+        rm -f "$temp_file_list"
+        echo "$temp_log"
+        return
+    fi
+
+    print_status "Copying $total_files files to date-specific folders..." >&2
+
+    # Clear the log file
+    > "$temp_log"
+
+    # Second pass: copy files with progress
+    local current_file=0
+    while read -r file; do
+        if [ -f "$file" ]; then
+            local filename=$(basename "$file")
+            local extension="${filename##*.}"
+            extension=$(echo "$extension" | tr '[:upper:]' '[:lower:]')
             
+            # Skip system/metadata files (camera and DJI files)
+            case "$extension" in
+                ind|thm|xml|bdm|bin|int|bnp|inp|scr|db|lrf)
+                    continue
+                    ;;
+            esac
+
+            ((current_file++))
+
+            # Calculate and display progress
+            local percent=$((current_file * 100 / total_files))
+            local progress_bar=""
+            local filled=$((percent / 2))
+            local empty=$((50 - filled))
+
+            for ((i=0; i<filled; i++)); do
+                progress_bar+="█"
+            done
+            for ((i=0; i<empty; i++)); do
+                progress_bar+="░"
+            done
+
+            # Show progress (simplified for debugging)
+            if [ $((current_file % 10)) -eq 0 ] || [ "$current_file" -eq "$total_files" ]; then
+                printf "\r\033[2K${BLUE}[INFO]${NC} Progress: %d%% (%d/%d)" "$percent" "$current_file" "$total_files"
+            fi
+
             # Get file date, year and corresponding destination
             local file_date=$(get_file_date "$file")
             local file_year=$(get_file_year "$file")
@@ -222,7 +270,7 @@ copy_files_by_date() {
                 # Create subfolder only when needed
                 if [ ! -d "$dest_dir" ]; then
                     mkdir -p "$dest_dir"
-                    print_status "Created $file_type folder in $(basename "$destination")"
+                    print_status "Created $file_type folder in $(basename "$destination")" >&2
                 fi
             fi
             
@@ -240,17 +288,24 @@ copy_files_by_date() {
                 ((counter++))
             done
             
-            # Copy file with progress
-            print_status "Copying $(basename "$file") to $(basename "$destination")/$file_type..."
+            # Copy file silently to avoid interfering with progress bar
             if cp -p "$file" "$dest_file"; then
                 echo "$file|$dest_file" >> "$temp_log"
             else
-                print_error "Failed to copy $file"
+                printf "\n" >&2
+                print_error "Failed to copy $file" >&2
                 exit 1
             fi
         fi
-    done
-    
+    done < "$temp_file_list"
+
+    # Clear progress line and show completion
+    printf "\n" >&2
+    print_success "Completed copying $total_files files!" >&2
+
+    # Clean up temp file
+    rm -f "$temp_file_list"
+
     echo "$temp_log"
 }
 
@@ -284,13 +339,29 @@ verify_files() {
 # Function to eject volume
 eject_volume() {
     local volume="$1"
-    
+
     print_status "Ejecting $(basename "$volume")..."
-    if diskutil eject "$volume" >/dev/null 2>&1; then
-        print_success "Successfully ejected $(basename "$volume")"
+
+    # Get the device identifier for more reliable ejection
+    local device=$(diskutil info "$volume" 2>/dev/null | grep "Device Node:" | awk '{print $3}')
+
+    if [ -n "$device" ]; then
+        print_status "Found device: $device"
+    fi
+
+    # Try multiple ejection methods
+    if [ -n "$device" ] && diskutil eject "$device" 2>/dev/null; then
+        print_success "Successfully ejected $(basename "$volume") via device"
+        return 0
+    elif diskutil eject "$volume" 2>/dev/null; then
+        print_success "Successfully ejected $(basename "$volume") via volume path"
+        return 0
+    elif diskutil unmount "$volume" 2>/dev/null; then
+        print_success "Successfully unmounted $(basename "$volume")"
         return 0
     else
         print_error "Failed to eject $(basename "$volume")"
+        print_error "You may need to eject manually from Finder"
         return 1
     fi
 }
@@ -386,8 +457,13 @@ main() {
     fi
     
     # Count copied files
-    file_count=$(wc -l < "$log_file" 2>/dev/null || echo "0")
-    
+    if [ -f "$log_file" ]; then
+        file_count=$(wc -l < "$log_file" 2>/dev/null || echo "0")
+    else
+        print_error "Log file not found: $log_file"
+        file_count=0
+    fi
+
     if [ "$file_count" -eq 0 ]; then
         print_warning "No files found to copy."
         rm -f "$log_file"
@@ -395,15 +471,17 @@ main() {
     fi
     
     print_success "Copied $file_count files."
-    
+
     # Verify files
+    print_status "Starting verification process..."
     if verify_files "$log_file"; then
         print_success "All files verified successfully!"
-        
+
         # Clean up log file
         rm -f "$log_file"
-        
+
         # Ask about ejection
+        print_status "DEBUG: About to ask for ejection"
         echo
         read -p "Eject SD card? (y/n): " eject_choice
         case "$eject_choice" in
@@ -424,6 +502,8 @@ main() {
         rm -f "$log_file"
         exit 1
     fi
+
+    print_status "DEBUG: Script reached end of main function"
 }
 
 # Run main function
