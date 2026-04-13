@@ -1,0 +1,380 @@
+# ============================================================
+# Borgmatic Configuration for Unraid
+# ============================================================
+# This file controls all aspects of your backup:
+# - What to backup (source_directories)
+# - Where to backup (repositories)
+# - When to backup (cron)
+# - How long to keep backups (retention)
+# - What to exclude (exclude_patterns)
+#
+# Edit this file to match your needs, then place it at:
+# /mnt/user/appdata/borgmatic/.config/borgmatic/config.yaml
+# ============================================================
+
+# ============================================================
+# BACKUP SOURCES
+# ============================================================
+# Directories to include in backups
+# These paths are INSIDE the container (mapped via Docker volumes)
+source_directories:
+  - /mnt/source/appdata          # Maps to your Unraid appdata
+  # Add more sources as needed:
+  # - /mnt/source/documents
+  # - /mnt/source/photos
+  # - /mnt/source/important_data
+
+# ============================================================
+# REPOSITORIES
+# ============================================================
+# Where to store backups
+# You can have multiple repositories (local + remote)
+repositories:
+  # Local backup repository
+  - path: /mnt/borg-repository
+    label: local
+
+  # Remote backup repository (uncomment and configure for remote backups)
+  # - path: ssh://backup-user@backup-server.com:22/~/backups/borg-unraid
+  #   label: offsite
+
+# ============================================================
+# BACKUP SETTINGS
+# ============================================================
+
+# Archive name format (uses timestamp + hostname)
+# Default creates archives like: 2024-01-15T02-00-00-Tower
+archive_name_format: '{now:%Y-%m-%dT%H-%M-%S}-{hostname}'
+
+# Compression algorithm
+# Options: none, lz4 (fast), zstd (balanced), zstd,3 (better), lzma,6 (best but slow)
+# Recommendation for Unraid: lz4 (fast, low CPU usage)
+compression: lz4
+
+# One file system only (don't cross filesystem boundaries)
+# Recommended: true for Unraid to avoid backing up /dev, /proc, etc.
+one_file_system: true
+
+# Exclude caches (respects CACHEDIR.TAG)
+exclude_caches: true
+
+# Exclude if nodump flag is set
+exclude_if_present:
+  - .nobackup
+  - NOBACKUP
+
+# ============================================================
+# EXCLUDE PATTERNS
+# ============================================================
+# Files and directories to exclude from backups
+exclude_patterns:
+  # Temporary files
+  - '*.tmp'
+  - '*.temp'
+  - '*.log'
+  - '*.cache'
+
+  # OS files
+  - '.DS_Store'
+  - 'Thumbs.db'
+  - 'desktop.ini'
+
+  # Common cache directories (adjust for your apps)
+  - '*/cache/*'
+  - '*/Cache/*'
+  - '*/caches/*'
+  - '*/logs/*'
+  - '*/Logs/*'
+  - '*/tmp/*'
+  - '*/temp/*'
+
+  # Plex cache (large and rebuilds automatically)
+  - '/mnt/source/appdata/plex/Library/Application Support/Plex Media Server/Cache'
+  - '/mnt/source/appdata/plex/Library/Application Support/Plex Media Server/Logs'
+
+  # Add app-specific exclusions here:
+  # - '/mnt/source/appdata/your-app/big-cache-folder'
+
+# ============================================================
+# RETENTION POLICY
+# ============================================================
+# How long to keep backups
+# Borg will automatically prune old backups according to this policy
+retention:
+  # Keep all backups within this time period
+  keep_within: 14d
+
+  # Keep the last N daily backups
+  keep_daily: 7
+
+  # Keep the last N weekly backups (one per week)
+  keep_weekly: 4
+
+  # Keep the last N monthly backups (one per month)
+  keep_monthly: 6
+
+  # Keep the last N yearly backups (one per year)
+  # keep_yearly: 2
+
+# Delete archives after pruning (recommended)
+# Set to false to keep deleted archives as "deleted" markers
+prefix: '{hostname}-'
+
+# ============================================================
+# CONSISTENCY CHECKS
+# ============================================================
+# Verify repository and archive integrity
+consistency:
+  # Which checks to run
+  checks:
+    # Verify repository structure
+    - name: repository
+      frequency: 2 weeks
+
+    # Verify archive contents (slower, more thorough)
+    - name: archives
+      frequency: 1 month
+      # Only check recent archives (faster)
+      # check_last: 3
+
+# ============================================================
+# HOOKS
+# ============================================================
+# Commands to run before/after backups or on errors
+hooks:
+  # Before backup starts
+  before_backup:
+    - echo "Starting Borg backup at $(date)"
+
+    # Example: Dump database before backup
+    # - docker exec mariadb mysqldump -u root -pPASSWORD --all-databases > /mnt/source/db-backup.sql
+
+    # Example: Stop Docker containers for consistent backup
+    # - docker stop plex
+
+  # After successful backup
+  after_backup:
+    - echo "Borg backup completed successfully at $(date)"
+
+    # Example: Remove database dump
+    # - rm -f /mnt/source/db-backup.sql
+
+    # Example: Restart stopped containers
+    # - docker start plex
+
+    # Example: Ping healthcheck service
+    # - curl -fsS -m 10 --retry 5 https://hc-ping.com/YOUR-UUID-HERE
+
+  # On backup failure
+  on_error:
+    - echo "ERROR: Borg backup failed at $(date)" >&2
+
+    # Example: Send notification via Unraid API
+    # - /usr/local/emhttp/webGui/scripts/notify -s "Backup Failed" -d "Borg backup encountered an error" -i alert
+
+    # Example: Ping healthcheck failure endpoint
+    # - curl -fsS -m 10 --retry 5 https://hc-ping.com/YOUR-UUID-HERE/fail
+
+  # Before pruning old archives
+  # before_prune:
+  #   - echo "Pruning old backups..."
+
+  # After pruning
+  # after_prune:
+  #   - echo "Prune completed"
+
+  # Before running consistency checks
+  # before_check:
+  #   - echo "Running repository checks..."
+
+  # After consistency checks
+  # after_check:
+  #   - echo "Checks completed"
+
+# ============================================================
+# SCHEDULING
+# ============================================================
+# When to run backups (cron format)
+# Format: minute hour day month weekday
+#
+# Examples:
+#   "0 2 * * *"      - Every day at 2:00 AM
+#   "0 2 * * 0"      - Every Sunday at 2:00 AM
+#   "0 2 1,15 * *"   - 1st and 15th of month at 2:00 AM
+#   "0 2 1 * *"      - 1st of each month at 2:00 AM
+#   "0 */6 * * *"    - Every 6 hours
+#
+# Use https://crontab.guru/ to generate schedules
+#
+cron:
+  # Default: 1st and 15th of every month at 2 AM
+  - "0 2 1,15 * *"
+
+  # For multiple schedules, add more entries:
+  # - "0 2 * * *"    # Daily at 2 AM
+  # - "0 4 * * 0"    # Weekly (Sunday) at 4 AM
+
+# ============================================================
+# STORAGE SETTINGS
+# ============================================================
+
+# Borg cache directory (speeds up backups)
+# This is automatically configured via Docker volume mount
+# No need to change unless you have specific requirements
+
+# Lock wait time (how long to wait if repository is locked)
+lock_wait: 5
+
+# Umask for created files
+# umask: 0077
+
+# ============================================================
+# SSH SETTINGS (for remote backups)
+# ============================================================
+# These are optional - only needed if using SSH repositories
+# SSH keys should be placed in: /mnt/user/appdata/borgmatic/.ssh/
+
+# SSH command to use
+# ssh_command: ssh -i /root/.ssh/id_ed25519
+
+# ============================================================
+# NOTIFICATIONS
+# ============================================================
+# Borgmatic can integrate with various monitoring services
+
+# Healthchecks.io integration
+# healthchecks:
+#   ping_url: https://hc-ping.com/YOUR-UUID-HERE
+#   ping_body_limit: 100000
+#   send_logs: true
+
+# Cronitor integration
+# cronitor:
+#   ping_url: https://cronitor.link/p/YOUR-KEY/YOUR-JOB-ID
+
+# PagerDuty integration
+# pagerduty:
+#   integration_key: YOUR_INTEGRATION_KEY
+
+# Cronhub integration
+# cronhub:
+#   ping_url: https://cronhub.io/start/YOUR-UUID
+
+# Ntfy integration (self-hosted notifications)
+# ntfy:
+#   topic: borg-backup
+#   server: https://ntfy.sh
+#   username: your-username
+#   password: your-password
+
+# Prometheus Pushgateway integration
+# Pushes backup metrics to Prometheus for monitoring with Grafana
+# prometheus:
+#   pushgateway: http://pushgateway:9091
+#   # Optional: Add custom labels
+#   labels:
+#     job: borgmatic
+#     instance: unraid-server
+#     environment: production
+
+# Alternative: Export metrics via hooks for Prometheus/Grafana
+# This approach uses hooks to write metrics to a file that node_exporter can scrape
+# hooks:
+#   after_backup:
+#     # Write metrics to textfile collector directory
+#     - |
+#       cat > /var/lib/node_exporter/textfile_collector/borgmatic.prom << EOF
+#       # HELP borgmatic_backup_timestamp_seconds Timestamp of last backup
+#       # TYPE borgmatic_backup_timestamp_seconds gauge
+#       borgmatic_backup_timestamp_seconds $(date +%s)
+#       # HELP borgmatic_backup_success Last backup success status (1=success, 0=failure)
+#       # TYPE borgmatic_backup_success gauge
+#       borgmatic_backup_success 1
+#       EOF
+#   on_error:
+#     - |
+#       cat > /var/lib/node_exporter/textfile_collector/borgmatic.prom << EOF
+#       # HELP borgmatic_backup_timestamp_seconds Timestamp of last backup attempt
+#       # TYPE borgmatic_backup_timestamp_seconds gauge
+#       borgmatic_backup_timestamp_seconds $(date +%s)
+#       # HELP borgmatic_backup_success Last backup success status (1=success, 0=failure)
+#       # TYPE borgmatic_backup_success gauge
+#       borgmatic_backup_success 0
+#       EOF
+
+# ============================================================
+# ADVANCED OPTIONS
+# ============================================================
+
+# Numeric repository ID (for multi-repo setups)
+# repository_id: 1
+
+# Extra Borg create arguments
+# extra_borg_options:
+#   create: --stats --progress
+
+# Relocated repository access
+# relocated_repo_access_is_ok: false
+
+# Unknown unencrypted repository access
+# unknown_unencrypted_repo_access_is_ok: false
+
+# ============================================================
+# EXAMPLE CONFIGURATIONS
+# ============================================================
+
+# Example 1: Minimal local-only backup
+# ------------------------------------------------------------
+# repositories:
+#   - path: /mnt/borg-repository
+# source_directories:
+#   - /mnt/source/appdata
+# retention:
+#   keep_daily: 7
+# cron:
+#   - "0 3 * * *"
+
+# Example 2: Local + Remote with different schedules
+# ------------------------------------------------------------
+# Create two separate config files:
+# - local.yaml  (daily backups to local repository)
+# - remote.yaml (weekly backups to remote repository)
+
+# Example 3: Multiple sources, aggressive pruning
+# ------------------------------------------------------------
+# source_directories:
+#   - /mnt/source/appdata
+#   - /mnt/source/documents
+#   - /mnt/source/photos
+# retention:
+#   keep_within: 7d
+#   keep_daily: 7
+#   keep_weekly: 4
+#   keep_monthly: 3
+
+# ============================================================
+# NOTES
+# ============================================================
+# 1. After editing this file, restart the container:
+#    docker restart borgmatic
+#
+# 2. Test your configuration:
+#    docker exec borgmatic borgmatic --dry-run --verbosity 1
+#
+# 3. Run a manual backup:
+#    docker exec borgmatic borgmatic --verbosity 1 --stats
+#
+# 4. List existing archives:
+#    docker exec borgmatic borgmatic list
+#
+# 5. Validate this YAML file:
+#    docker exec borgmatic borgmatic config validate
+#
+# 6. IMPORTANT: Export and save repository keys offline!
+#    docker exec borgmatic borg key export /mnt/borg-repository /tmp/repo.key
+#    docker cp borgmatic:/tmp/repo.key ./borg-local-repo.key
+#
+# 7. Keep your BORG_PASSPHRASE safe! You need BOTH:
+#    - The passphrase (in .env file)
+#    - The repository key (exported above)
+#    to recover backups.
