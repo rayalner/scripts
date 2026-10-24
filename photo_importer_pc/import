@@ -1,0 +1,4 @@
+#!/usr/bin/env bash
+# Wrapper script to run photo_import.sh
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+exec /bin/bash "$SCRIPT_DIR/photo_import.sh" "$@"
